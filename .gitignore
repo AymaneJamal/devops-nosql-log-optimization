@@ -29,6 +29,7 @@ jenkins_home/
 infrastructure-localstack/
 db_container_save/
 api-requests/
+grpc-requests/
 
 
 # HTTP Client Requests
