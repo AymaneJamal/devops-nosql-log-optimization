@@ -1,0 +1,76 @@
+pipeline {
+    agent any
+
+    environment {
+        CUSTOM_PATH = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        DOCKERHUB_USER = "your-dockerhub-username" // Replace with your DockerHub username
+    }
+
+    stages {
+        stage('Clone repository') {
+            steps {
+                git credentialsId: 'your-git-credentials-id', // Replace with your Jenkins Git credentials ID
+                    url: 'https://github.com/your-org/your-repo.git', // Replace with your GitHub repo URL
+                    branch: 'main'
+            }
+        }
+
+        stage('Debug PATH') {
+            steps {
+                sh """
+                    PATH=$CUSTOM_PATH
+                    echo \$PATH
+                    which docker || echo 'docker not found'
+                    PATH=$CUSTOM_PATH docker version || echo 'docker issue'
+                    which docker-compose || echo 'docker-compose not found'
+                    PATH=$CUSTOM_PATH docker-compose version || echo 'docker-compose issue'
+                """
+            }
+        }
+
+        stage('Docker Hub Login') {
+            steps {
+                withCredentials([string(credentialsId: 'your-dockerhub-credentials-id', variable: 'dockerhubpwd')]) {
+                    sh """
+                        PATH=$CUSTOM_PATH echo "${dockerhubpwd}" | docker login -u ${DOCKERHUB_USER} --password-stdin
+                    """
+                }
+            }
+        }
+
+        stage('Deploy Infrastructure') {
+            steps {
+                sh """
+                    PATH=$CUSTOM_PATH
+                    docker network create app-network || true
+                    docker-compose up -d
+
+                    docker ps | grep auth-service-db
+                    docker ps | grep patient-service-db
+                    docker ps | grep kafka
+                """
+            }
+        }
+    }
+
+    post {
+        always {
+            sh """
+                PATH=$CUSTOM_PATH
+                docker logout || true
+            """
+            echo "Infrastructure deployment completed."
+        }
+        success {
+            echo "Infrastructure successfully deployed to Docker."
+        }
+        failure {
+            echo "Failed to deploy infrastructure."
+            sh """
+                PATH=$CUSTOM_PATH
+                # Optional: Clean up on failure
+                # docker-compose down
+            """
+        }
+    }
+}

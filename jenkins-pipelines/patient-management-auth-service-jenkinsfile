@@ -1,0 +1,110 @@
+pipeline {
+    agent any
+
+    environment {
+        IMAGE_NAME = "auth-service"
+        IMAGE_TAG = "latest"
+        CONTAINER_NAME = "auth-service"
+        DB_CONTAINER_NAME = "auth-service-db"
+        PORT = "4005"
+        NETWORK = "app-network" // Adjust this to match your Docker setup
+        CUSTOM_PATH = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+    }
+
+    stages {
+        stage('Clone repository') {
+            steps {
+                git credentialsId: 'your-git-credentials-id', // Replace with your Git credentials ID
+                    url: 'https://github.com/your-org/your-auth-service-repo.git', // Replace with your public repo
+                    branch: 'main'
+            }
+        }
+
+        stage('Build Docker image') {
+            steps {
+                sh 'PATH=$CUSTOM_PATH docker build -t ${IMAGE_NAME}:${IMAGE_TAG} -f Dockerfile .'
+            }
+        }
+
+        stage('Network Setup') {
+            steps {
+                sh """
+                    PATH=$CUSTOM_PATH
+                    docker network create ${NETWORK} || true
+                    docker network inspect ${NETWORK} || echo "Network issue!"
+
+                    if docker ps -q -f name=${DB_CONTAINER_NAME} | grep -q .; then
+                        if ! docker network inspect ${NETWORK} | grep -q ${DB_CONTAINER_NAME}; then
+                            echo "Connecting database container to network..."
+                            docker network connect ${NETWORK} ${DB_CONTAINER_NAME} || true
+                        else
+                            echo "Database container already connected to network."
+                        fi
+                    else
+                        echo "Warning: Database container \${DB_CONTAINER_NAME} not found!"
+                    fi
+                """
+            }
+        }
+
+        stage('Wait for Database') {
+            steps {
+                sh """
+                    PATH=$CUSTOM_PATH
+                    if docker ps -q -f name=${DB_CONTAINER_NAME} | grep -q .; then
+                        echo "Database container running, waiting for PostgreSQL to be ready..."
+
+                        attempt=1
+                        max_attempts=10
+                        until docker exec ${DB_CONTAINER_NAME} pg_isready -h localhost -U admin_user || [ \$attempt -eq \$max_attempts ]; do
+                            echo "Waiting for database to be ready (attempt \$attempt of \$max_attempts)..."
+                            sleep 3
+                            attempt=\$((attempt+1))
+                        done
+
+                        if [ \$attempt -eq \$max_attempts ]; then
+                            echo "Database not ready in time."
+                            exit 1
+                        fi
+                    else
+                        echo "Database container not running. Skipping readiness check."
+                    fi
+                """
+            }
+        }
+
+        stage('Run Docker container') {
+            steps {
+                sh """
+                    PATH=$CUSTOM_PATH
+                    docker rm -f ${CONTAINER_NAME} || true
+
+                    docker run -d \\
+                        --name ${CONTAINER_NAME} \\
+                        --network ${NETWORK} \\
+                        -e SPRING_PROFILES_ACTIVE=docker \\
+                        -p ${PORT}:${PORT} \\
+                        ${IMAGE_NAME}:${IMAGE_TAG}
+                """
+            }
+        }
+
+        stage('Verify Container') {
+            steps {
+                sh """
+                    PATH=$CUSTOM_PATH
+                    docker ps | grep ${CONTAINER_NAME} || echo "Container not running!"
+                """
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Auth Service successfully deployed."
+        }
+        failure {
+            echo "Auth Service deployment failed."
+        }
+    }
+}

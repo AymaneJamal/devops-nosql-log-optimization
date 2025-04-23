@@ -1,0 +1,99 @@
+pipeline {
+    agent any
+
+    environment {
+        CUSTOM_PATH = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+    }
+
+    stages {
+        stage('Clone repository') {
+            steps {
+                git credentialsId: 'your-git-credentials-id', // Replace with your Jenkins Git credentials ID
+                    url: 'https://github.com/your-org/your-logging-materials-repo.git', // Replace with your GitHub repo URL
+                    branch: 'main'
+            }
+        }
+
+        stage('Stop and Clean') {
+            steps {
+                sh """
+                    PATH=$CUSTOM_PATH
+                    docker-compose down --remove-orphans || true
+                    docker volume rm -f patient-management-logging-materials_elasticsearch-data || true
+                    docker volume rm -f patient-management-logging-materials_mongodb-data || true
+                    docker volume rm -f patient-management-logging-materials_mysql-data || true
+                """
+            }
+        }
+
+        stage('Prepare Directories') {
+            steps {
+                sh """
+                    mkdir -p logstash/output mongodb/init-scripts mysql/init-scripts
+                    chmod -R 777 logstash/output
+                    touch logstash/output/logs.json
+                    echo '{}' > logstash/output/logs.json
+                """
+            }
+        }
+
+        stage('Build Logstash Image') {
+            steps {
+                sh """
+                    cd logstash
+                    docker build --platform linux/arm64 -t patient-management-logstash:latest .
+                """
+            }
+        }
+
+        stage('Deploy Stack') {
+            steps {
+                sh """
+                    docker-compose up -d
+                    sleep 120  # Allow services to stabilize
+                """
+            }
+        }
+
+        stage('Verify Stack') {
+            steps {
+                sh """
+                    docker ps
+                    docker logs logstash || echo "Logstash logs unavailable"
+                    docker logs mongodb || echo "MongoDB logs unavailable"
+                    docker logs mysql || echo "MySQL logs unavailable"
+                """
+            }
+        }
+
+        stage('Send Test Logs') {
+            steps {
+                sh '''
+                    for i in {1..5}; do
+                        curl -X POST -H 'Content-Type: application/json' -d '{
+                            "source": "jenkins-test",
+                            "message": "Log '$i'",
+                            "container_name": "jenkins-test",
+                            "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%S.000Z)'"
+                        }' http://localhost:9502
+                        sleep 5
+                    done
+                '''
+            }
+        }
+
+        stage('Post Verification') {
+            steps {
+                sh """
+                    echo 'You can now run the local log comparison script manually.'
+                """
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ Stack deployed — run log_comparison.py locally in virtualenv"
+        }
+    }
+}

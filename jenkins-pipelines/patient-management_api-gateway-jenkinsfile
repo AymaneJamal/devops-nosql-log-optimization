@@ -1,0 +1,86 @@
+pipeline {
+    agent any
+
+    environment {
+        IMAGE_NAME = "api-gateway"
+        IMAGE_TAG = "latest"
+        CONTAINER_NAME = "api-gateway"
+        AUTH_SERVICE_CONTAINER = "auth-service"
+        AUTH_SERVICE_URL = "http://auth-service:4005"
+        PORT = "4004"
+        NETWORK = "app-network" // Update this if you use a different Docker network
+        CUSTOM_PATH = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+    }
+
+    stages {
+        stage('Clone repository') {
+            steps {
+                git credentialsId: 'your-git-credentials-id', // Replace with your Git credentials ID
+                    url: 'https://github.com/your-org/your-repo.git', // Replace with your public GitHub repo
+                    branch: 'main'
+            }
+        }
+
+        stage('Build Docker image') {
+            steps {
+                sh 'PATH=$CUSTOM_PATH docker build -t ${IMAGE_NAME}:${IMAGE_TAG} -f Dockerfile .'
+            }
+        }
+
+        stage('Network Setup') {
+            steps {
+                sh """
+                    PATH=$CUSTOM_PATH
+                    docker network create ${NETWORK} || true
+                    docker network inspect ${NETWORK} || echo "Network issue!"
+
+                    if docker ps -q -f name=${AUTH_SERVICE_CONTAINER} | grep -q .; then
+                        if ! docker network inspect ${NETWORK} | grep -q ${AUTH_SERVICE_CONTAINER}; then
+                            echo "Connecting auth service container to network..."
+                            docker network connect ${NETWORK} ${AUTH_SERVICE_CONTAINER} || true
+                        else
+                            echo "Auth service container already connected to network."
+                        fi
+                    else
+                        echo "Warning: Auth service container \${AUTH_SERVICE_CONTAINER} not found! API Gateway may not function correctly."
+                    fi
+                """
+            }
+        }
+
+        stage('Run Docker container') {
+            steps {
+                sh """
+                    PATH=$CUSTOM_PATH
+                    docker rm -f ${CONTAINER_NAME} || true
+
+                    docker run -d \\
+                        --name ${CONTAINER_NAME} \\
+                        --network ${NETWORK} \\
+                        -e AUTH_SERVICE_URL=${AUTH_SERVICE_URL} \\
+                        -e SPRING_PROFILES_ACTIVE=docker \\
+                        -p ${PORT}:${PORT} \\
+                        ${IMAGE_NAME}:${IMAGE_TAG}
+                """
+            }
+        }
+
+        stage('Verify Container') {
+            steps {
+                sh """
+                    PATH=$CUSTOM_PATH
+                    docker ps | grep ${CONTAINER_NAME} || echo "Container not running!"
+                """
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "API Gateway successfully deployed."
+        }
+        failure {
+            echo "API Gateway deployment failed."
+        }
+    }
+}

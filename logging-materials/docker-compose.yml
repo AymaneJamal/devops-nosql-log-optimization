@@ -1,0 +1,107 @@
+version: '3.8'
+
+services:
+  logstash:
+    platform: linux/arm64
+    build: ./logstash
+    container_name: logstash
+    volumes:
+      - ./logstash/pipeline:/usr/share/logstash/pipeline
+      - ./logstash/config:/usr/share/logstash/config
+      - ./logstash/output:/usr/share/logstash/output
+      - ./host-logs:/mnt/host-logs
+    ports:
+      - "5044:5044"
+      - "9600:9600"
+      - "9501:9501"
+      - "9501:9501/udp"
+      - "9502:9502"
+    networks:
+      - logging-network
+    depends_on:
+      - elasticsearch
+      - mongodb
+    environment:
+      LS_JAVA_OPTS: "-Xmx512m -Xms512m"
+    restart: unless-stopped
+
+  elasticsearch:
+    platform: linux/arm64
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.17.0
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - xpack.security.enabled=false
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    networks:
+      - logging-network
+    restart: unless-stopped
+
+  kibana:
+    platform: linux/arm64
+    image: docker.elastic.co/kibana/kibana:7.17.0
+    container_name: kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    ports:
+      - "5601:5601"
+    networks:
+      - logging-network
+    depends_on:
+      - elasticsearch
+    restart: unless-stopped
+
+  mongodb:
+    platform: linux/arm64
+    image: mongo:latest
+    container_name: mongodb
+    command: [--auth]
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb-data:/data/db
+      - ./mongodb/init-scripts:/docker-entrypoint-initdb.d
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=password
+      - MONGO_INITDB_DATABASE=logging
+    networks:
+      - logging-network
+    restart: unless-stopped
+
+  mysql:
+    platform: linux/arm64
+    image: mysql:8.0
+    container_name: mysql
+    ports:
+      - "13306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./mysql/init-scripts:/docker-entrypoint-initdb.d
+    environment:
+      - MYSQL_ROOT_PASSWORD=rootpassword
+      - MYSQL_DATABASE=logging
+      - MYSQL_USER=loguser
+      - MYSQL_PASSWORD=logpassword
+    networks:
+      - logging-network
+    restart: unless-stopped
+
+volumes:
+  elasticsearch-data:
+  mongodb-data:
+  mysql-data:
+
+networks:
+  logging-network:
+    driver: bridge

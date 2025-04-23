@@ -1,0 +1,89 @@
+pipeline {
+    agent any
+
+    environment {
+        IMAGE_NAME = "analytics-service"
+        IMAGE_TAG = "latest"
+        CONTAINER_NAME = "analytics-service"
+        KAFKA_CONTAINER_NAME = "kafka"
+        PORT = "4002"
+        NETWORK = "app-network" // Change if your Docker network differs
+        CUSTOM_PATH = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+    }
+
+    stages {
+        stage('Clone repository') {
+            steps {
+                git credentialsId: 'your-git-credentials-id', // Replace with your GitHub credentials ID
+                    url: 'https://github.com/your-org/your-analytics-service-repo.git', // Replace with your repo
+                    branch: 'main'
+            }
+        }
+
+        stage('Build Docker image') {
+            steps {
+                sh 'PATH=$CUSTOM_PATH docker build -t ${IMAGE_NAME}:${IMAGE_TAG} -f Dockerfile .'
+            }
+        }
+
+        stage('Network Setup') {
+            steps {
+                sh """
+                    PATH=$CUSTOM_PATH
+                    docker network create ${NETWORK} || true
+                    docker network inspect ${NETWORK} || echo "Network issue!"
+
+                    if docker ps -q -f name=${KAFKA_CONTAINER_NAME} | grep -q .; then
+                        if ! docker network inspect ${NETWORK} | grep -q ${KAFKA_CONTAINER_NAME}; then
+                            echo "Connecting Kafka container to network..."
+                            docker network connect ${NETWORK} ${KAFKA_CONTAINER_NAME} || true
+                        else
+                            echo "Kafka container already connected to network."
+                        fi
+                    else
+                        echo "Warning: Kafka container \${KAFKA_CONTAINER_NAME} not found!"
+                    fi
+                """
+            }
+        }
+
+        stage('Run Docker container') {
+            steps {
+                sh """
+                    PATH=$CUSTOM_PATH
+                    docker rm -f ${CONTAINER_NAME} || true
+
+                    docker run -d \\
+                        --name ${CONTAINER_NAME} \\
+                        --network ${NETWORK} \\
+                        -e SPRING_KAFKA_BOOTSTRAP_SERVERS="kafka:9092" \\
+                        -p ${PORT}:${PORT} \\
+                        ${IMAGE_NAME}:${IMAGE_TAG}
+                """
+            }
+        }
+
+        stage('Verify Container') {
+            steps {
+                sh """
+                    PATH=$CUSTOM_PATH
+                    docker ps | grep ${CONTAINER_NAME}
+
+                    echo "Waiting for application to start..."
+                    sleep 10
+
+                    docker logs --tail 50 ${CONTAINER_NAME} || echo "No logs found or container not running"
+                """
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Analytics Service successfully deployed."
+        }
+        failure {
+            echo "Analytics Service deployment failed."
+        }
+    }
+}

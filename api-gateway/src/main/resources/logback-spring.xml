@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <!-- Appender pour la console standard -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- Appender pour envoyer les logs à Logstash via TCP -->
+    <appender name="LOGSTASH" class="net.logstash.logback.appender.LogstashTcpSocketAppender">
+        <!-- Adresse du serveur Logstash - utilisez logstash:9501 dans un environnement Docker -->
+        <destination>logstash:9501</destination>
+
+        <!-- Reconnexion en cas de perte de connexion -->
+        <reconnectionDelay>1 second</reconnectionDelay>
+
+        <!-- Encoder Logstash avec des champs personnalisés -->
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <customFields>{"application":"api-gateway","container_name":"api-gateway","environment":"${SPRING_PROFILES_ACTIVE:-default}"}</customFields>
+            <includeMdc>true</includeMdc>
+            <includeContext>true</includeContext>
+        </encoder>
+    </appender>
+
+    <!-- Logger racine -->
+    <root level="INFO">
+        <appender-ref ref="CONSOLE" />
+        <appender-ref ref="LOGSTASH" />
+    </root>
+
+    <!-- Réglages de niveau spécifiques pour certains packages -->
+    <logger name="org.springframework" level="INFO" />
+    <logger name="com.pm" level="DEBUG" />
+</configuration>

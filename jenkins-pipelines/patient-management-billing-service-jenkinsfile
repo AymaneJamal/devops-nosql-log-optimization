@@ -1,0 +1,86 @@
+pipeline {
+    agent any
+
+    environment {
+        IMAGE_NAME = "billing-service"
+        IMAGE_TAG = "latest"
+        CONTAINER_NAME = "billing-service"
+        HTTP_PORT = "4001"
+        GRPC_PORT = "9001"
+        NETWORK = "app-network" // Adjust this if your Docker network differs
+        CUSTOM_PATH = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+    }
+
+    stages {
+        stage('Clone repository') {
+            steps {
+                git credentialsId: 'your-git-credentials-id', // Replace with your Git credentials ID
+                    url: 'https://github.com/your-org/your-billing-service-repo.git', // Replace with your repo URL
+                    branch: 'main'
+            }
+        }
+
+        stage('Build Docker image') {
+            steps {
+                sh 'PATH=$CUSTOM_PATH docker build -t ${IMAGE_NAME}:${IMAGE_TAG} -f Dockerfile .'
+            }
+        }
+
+        stage('Network Setup') {
+            steps {
+                sh """
+                    PATH=$CUSTOM_PATH
+                    docker network create ${NETWORK} || true
+                    docker network inspect ${NETWORK} || echo "Network issue!"
+                """
+            }
+        }
+
+        stage('Run Docker container') {
+            steps {
+                sh """
+                    PATH=$CUSTOM_PATH
+                    docker rm -f ${CONTAINER_NAME} || true
+
+                    docker run -d \\
+                        --name ${CONTAINER_NAME} \\
+                        --network ${NETWORK} \\
+                        -p ${HTTP_PORT}:${HTTP_PORT} \\
+                        -p ${GRPC_PORT}:${GRPC_PORT} \\
+                        ${IMAGE_NAME}:${IMAGE_TAG}
+                """
+            }
+        }
+
+        stage('Verify Container') {
+            steps {
+                sh """
+                    PATH=$CUSTOM_PATH
+                    docker ps | grep ${CONTAINER_NAME}
+
+                    echo "Waiting for application to start up..."
+                    sleep 10
+
+                    docker logs --tail 50 ${CONTAINER_NAME} || echo "Container not running or no logs available"
+
+                    echo "Checking connectivity from other services..."
+                    if docker ps -q -f name=patient-service | grep -q .; then
+                        echo "Testing connectivity from patient-service to billing-service (gRPC port)..."
+                        docker exec patient-service bash -c '(echo > /dev/tcp/billing-service/9001) >/dev/null 2>&1 && echo "gRPC Connection successful" || echo "gRPC Connection failed"' || echo "Connectivity test failed"
+                    else
+                        echo "Patient service container not found. Skipping connectivity test."
+                    fi
+                """
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Billing Service successfully deployed."
+        }
+        failure {
+            echo "Billing Service deployment failed."
+        }
+    }
+}
